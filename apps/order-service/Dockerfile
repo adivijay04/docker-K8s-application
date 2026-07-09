@@ -1,11 +1,11 @@
 # syntax=docker/dockerfile:1
 
 # ---------- Stage 1: build dependencies ----------
-FROM python:3.12-slim AS builder
+FROM python:3.12.4-slim AS builder
 
 # Build tools needed only for compiling wheels (e.g. pydantic-core, uvloop, etc.)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
+    build-essential=12.9 \
     gcc \
     && rm -rf /var/lib/apt/lists/*
 
@@ -15,12 +15,12 @@ WORKDIR /build
 COPY requirements.txt .
 
 # Build wheels instead of installing directly, so stage 2 doesn't need build tools at all
-RUN pip install --no-cache-dir --upgrade pip \
+RUN pip install --no-cache-dir --upgrade pip==24.1.2 \
     && pip wheel --no-cache-dir --wheel-dir /build/wheels -r requirements.txt
 
 
 # ---------- Stage 2: minimal runtime image ----------
-FROM python:3.12-slim AS runtime
+FROM python:3.12.4-slim AS runtime
 
 # Metadata
 LABEL maintainer="you@example.com" \
@@ -30,11 +30,12 @@ LABEL maintainer="you@example.com" \
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PATH="/home/appuser/.local/bin:${PATH}"
 
 # curl is needed for the HEALTHCHECK; strip apt lists immediately after
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
+    curl=7.88.1-10+deb12u7 \
     && rm -rf /var/lib/apt/lists/*
 
 # Create a non-root user/group with no login shell and no home dir clutter
@@ -58,7 +59,7 @@ USER appuser
 EXPOSE 8000
 
 # Adjust the path if your health endpoint differs; this assumes GET /health returns 200
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 # Assumes your ASGI app object is `app` inside app/main.py — adjust if different
