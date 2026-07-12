@@ -1,0 +1,50 @@
+# syntax=docker/dockerfile:1
+
+# ---------- Stage 1: build ----------
+FROM node:20-alpine AS builder
+
+WORKDIR /build
+
+# package-lock.json copied before source so `npm ci` layer is cached
+# independently of code changes — identical reasoning to requirements.txt
+COPY package.json package-lock.json ./
+
+# npm ci (not npm install) — installs exactly what's in the lockfile,
+# fails instead of silently resolving new versions if the lockfile is out of sync
+RUN npm ci
+
+COPY . .
+
+# Remove this line if notif has no build step (plain JS, no TypeScript)
+RUN npm run build
+
+# Strip devDependencies (typescript, test runners, etc.) after building —
+# they compiled the code but have no business existing in the runtime image
+RUN npm prune --omit=dev
+
+
+# ---------- Stage 2: minimal runtime ----------
+FROM node:20-alpine AS runtime
+
+ENV NODE_ENV=production
+
+# curl exists only for the HEALTHCHECK below
+RUN apk add --no-cache curl
+
+WORKDIR /app
+
+# node:alpine already ships a non-root "node" user (uid 1000) —
+# reusing it instead of creating a new one, unlike the Python/Go images
+# which had to create appuser from scratch
+COPY --from=builder --chown=node:node /build/node_modules ./node_modules
+COPY --from=builder --chown=node:node /build/dist ./dist
+COPY --from=builder --chown=node:node /build/package.json ./package.json
+
+USER node
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+CMD ["node", "dist/index.js"]
