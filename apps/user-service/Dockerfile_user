@@ -1,0 +1,44 @@
+# syntax=docker/dockerfile:1
+
+# ---------- Stage 1: build ----------
+FROM golang:1.23-alpine AS builder
+
+WORKDIR /build
+
+# Copy go.mod/go.sum first so dependency downloads are cached separately
+# from source changes — same caching logic as requirements.txt in Python
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+# CGO_ENABLED=0 produces a fully static binary with no libc dependency.
+# This is what makes it possible to run on a minimal base at all —
+# with CGO enabled you'd need glibc/musl present in the runtime stage.
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -ldflags="-w -s" -o /build/user-service ./cmd/user
+    # -ldflags="-w -s" strips debug symbols to shrink the binary.
+    # Drop this while you're still debugging — it removes info `dlv`/`gdb` need.
+
+
+# ---------- Stage 2: minimal runtime ----------
+FROM alpine:3.20 AS runtime
+
+# curl exists only for the HEALTHCHECK below. If you switch to a TCP-only
+# check or bake a healthcheck into the binary itself, remove this and go scratch/distroless.
+RUN apk add --no-cache curl \
+    && addgroup -g 1000 appuser \
+    && adduser -D -u 1000 -G appuser -s /sbin/nologin appuser
+
+WORKDIR /app
+
+COPY --from=builder --chown=appuser:appuser /build/user-service .
+
+USER appuser
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+CMD ["./user-service"]
